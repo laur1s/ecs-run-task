@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"os"
 	"strings"
 
@@ -15,6 +17,7 @@ import (
 
 var ecsCluster string
 var taskDefinition string
+var taskDefinitionFile bool
 var securityGroups string
 var subnets string
 var logGroup string
@@ -29,11 +32,19 @@ var rootCmd = &cobra.Command{
 			cmd.Usage()
 			os.Exit(1)
 		}
+		sess := session.Must(session.NewSessionWithOptions(session.Options{
+			SharedConfigState: session.SharedConfigEnable,
+		}))
+
+		if taskDefinitionFile {
+			taskDefinition = ParseTaskDefinition(sess, taskDefinition)
+			fmt.Println("Succesfully uploaded: ", taskDefinition)
+		}
+
 		sgList := strings.Split(securityGroups, ",")
 		subnetList := strings.Split(subnets, ",")
-		fmt.Println(sgList, subnetList)
 		//AWS session
-		sess := session.Must(session.NewSessionWithOptions(session.Options{
+		sess = session.Must(session.NewSessionWithOptions(session.Options{
 			SharedConfigState: session.SharedConfigEnable,
 		}))
 
@@ -62,10 +73,9 @@ func Execute() {
 
 func init() {
 	//cobra.OnInitialize(initConfig)
-
-	//rootCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
 	rootCmd.Flags().StringVarP(&ecsCluster, "cluster", "c", "", "Name of the Cluster")
-	rootCmd.Flags().StringVarP(&taskDefinition, "task-definition", "", "", "Task Definition to use")
+	rootCmd.Flags().StringVarP(&taskDefinition, "task-definition", "", "", "Task Definition to use can be a json file if used with -f flag")
+	rootCmd.Flags().BoolVarP(&taskDefinitionFile, "file", "f", false, "Read task definition from File")
 	rootCmd.Flags().StringVarP(&logGroup, "log-group", "", "", "Log group used by ECS Task")
 	rootCmd.Flags().StringVarP(&launchType, "launch-type", "", "FARGATE", "Launch Type: allowed EC2 or FARGATE")
 	rootCmd.Flags().StringVarP(&securityGroups, "security-groups", "", "", "Security groups to use")
@@ -152,4 +162,26 @@ func GetExit(sess *session.Session, ClusterName string, Task string) (int64, str
 	exitCode := *output.Tasks[0].Containers[0].ExitCode
 	stoppedReason := *output.Tasks[0].StoppedReason
 	return exitCode, stoppedReason
+}
+
+// Parses task
+func ParseTaskDefinition(sess *session.Session, fileName string) string {
+	svc := ecs.New(sess)
+	var ecsTaskDefinition ecs.RegisterTaskDefinitionInput
+	jsonFile, err := os.Open(fileName)
+	if err != nil {
+		fmt.Println(err)
+	}
+	fmt.Println("Successfully Opened task definition:", fileName)
+	defer jsonFile.Close()
+	byteValue, _ := ioutil.ReadAll(jsonFile)
+	json.Unmarshal(byteValue, &ecsTaskDefinition)
+	output, err := svc.RegisterTaskDefinition(&ecsTaskDefinition)
+	if err != nil {
+		fmt.Println("Got error registering task definition:")
+		fmt.Println(err.Error())
+		os.Exit(1)
+	}
+	return *output.TaskDefinition.TaskDefinitionArn
+
 }
