@@ -41,16 +41,23 @@ var rootCmd = &cobra.Command{
 			fmt.Println("Succesfully uploaded: ", taskDefinition)
 		}
 
-		sgList := strings.Split(securityGroups, ",")
 		subnetList := strings.Split(subnets, ",")
 		//AWS session
 		sess = session.Must(session.NewSessionWithOptions(session.Options{
 			SharedConfigState: session.SharedConfigEnable,
 		}))
+		var AwsVpcConfiguration ecs.AwsVpcConfiguration
+		if securityGroups != "" {
+			sgList := strings.Split(securityGroups, ",")
 
-		AwsVpcConfiguration := ecs.AwsVpcConfiguration{
-			SecurityGroups: aws.StringSlice(sgList),
-			Subnets:        aws.StringSlice(subnetList),
+			AwsVpcConfiguration = ecs.AwsVpcConfiguration{
+				SecurityGroups: aws.StringSlice(sgList),
+				Subnets:        aws.StringSlice(subnetList),
+			}
+		} else {
+			AwsVpcConfiguration = ecs.AwsVpcConfiguration{
+				Subnets: aws.StringSlice(subnetList),
+			}
 		}
 
 		LogStreamName, TaskArnID := RunTask(sess, ecsCluster, launchType, taskDefinition, AwsVpcConfiguration)
