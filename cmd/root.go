@@ -20,7 +20,6 @@ var taskDefinition string
 var taskDefinitionFile bool
 var securityGroups string
 var subnets string
-var logGroup string
 var launchType string
 
 // rootCmd represents the base command when called without any subcommands
@@ -41,29 +40,10 @@ var rootCmd = &cobra.Command{
 			fmt.Println("Succesfully uploaded: ", taskDefinition)
 		}
 
-		subnetList := strings.Split(subnets, ",")
-		//AWS session
-		sess = session.Must(session.NewSessionWithOptions(session.Options{
-			SharedConfigState: session.SharedConfigEnable,
-		}))
-		var AwsVpcConfiguration ecs.AwsVpcConfiguration
-		if securityGroups != "" {
-			sgList := strings.Split(securityGroups, ",")
+		logGroupName, logStreamName, taskArnID := RunTask(sess, ecsCluster, launchType, taskDefinition)
 
-			AwsVpcConfiguration = ecs.AwsVpcConfiguration{
-				SecurityGroups: aws.StringSlice(sgList),
-				Subnets:        aws.StringSlice(subnetList),
-			}
-		} else {
-			AwsVpcConfiguration = ecs.AwsVpcConfiguration{
-				Subnets: aws.StringSlice(subnetList),
-			}
-		}
-
-		LogStreamName, TaskArnID := RunTask(sess, ecsCluster, launchType, taskDefinition, AwsVpcConfiguration)
-
-		GetLogs(sess, LogStreamName, logGroup)
-		exitCode, exitReason := GetExit(sess, ecsCluster, TaskArnID)
+		GetLogs(sess, logStreamName, logGroupName)
+		exitCode, exitReason := GetExit(sess, ecsCluster, taskArnID)
 		fmt.Println("Exit reason:", exitReason)
 		os.Exit(int(exitCode))
 	},
@@ -81,56 +61,80 @@ func Execute() {
 func init() {
 	//cobra.OnInitialize(initConfig)
 	rootCmd.Flags().StringVarP(&ecsCluster, "cluster", "c", "", "Name of the Cluster")
-	rootCmd.Flags().StringVarP(&taskDefinition, "task-definition", "", "", "Task Definition to use can be a json file if used with -f flag")
+	rootCmd.Flags().StringVarP(&taskDefinition, "task-definition", "t", "", "Task Definition to use can be a json file if used with -f flag")
 	rootCmd.Flags().BoolVarP(&taskDefinitionFile, "file", "f", false, "Read task definition from File")
-	rootCmd.Flags().StringVarP(&logGroup, "log-group", "", "", "Log group used by ECS Task")
-	rootCmd.Flags().StringVarP(&launchType, "launch-type", "", "FARGATE", "Launch Type: allowed EC2 or FARGATE")
+	rootCmd.Flags().StringVarP(&launchType, "launch-type", "l", "FARGATE", "Launch Type: allowed EC2 or FARGATE")
 	rootCmd.Flags().StringVarP(&securityGroups, "security-groups", "", "", "Security groups to use")
 	rootCmd.Flags().StringVarP(&subnets, "subnets", "", "", "subnets where to deploy task separated by comma")
 }
 
 // RunTask runs task definition on specified ECS Cluster
 // It returns the LogStreamName
-func RunTask(sess *session.Session, Cluster string, LaunchType string, TaskDefinition string, AwsvpcConfiguration ecs.AwsVpcConfiguration) (string, string) {
+func RunTask(sess *session.Session, Cluster string, LaunchType string, TaskDefinition string) (string, string, string) {
+	subnetList := strings.Split(subnets, ",")
 	svc := ecs.New(sess)
 	fmt.Printf("Launching task %s in an ECS Cluster %s...", TaskDefinition, Cluster)
-	output, err := svc.RunTask(&ecs.RunTaskInput{
-		Cluster:        aws.String(Cluster),
-		Count:          aws.Int64(1),
-		LaunchType:     aws.String(LaunchType),
-		TaskDefinition: aws.String(TaskDefinition),
-		NetworkConfiguration: &ecs.NetworkConfiguration{
-			AwsvpcConfiguration: &AwsvpcConfiguration,
-		},
-	})
+	var runTaskInput ecs.RunTaskInput
+	if subnets == "" {
+		runTaskInput = ecs.RunTaskInput{
+			Cluster:        aws.String(Cluster),
+			Count:          aws.Int64(1),
+			LaunchType:     aws.String(LaunchType),
+			TaskDefinition: aws.String(TaskDefinition),
+		}
+	} else {
+		var awsVpcConfiguration ecs.AwsVpcConfiguration
+		if securityGroups != "" {
+			sgList := strings.Split(securityGroups, ",")
+
+			awsVpcConfiguration = ecs.AwsVpcConfiguration{
+				SecurityGroups: aws.StringSlice(sgList),
+				Subnets:        aws.StringSlice(subnetList),
+			}
+		} else {
+			awsVpcConfiguration = ecs.AwsVpcConfiguration{
+				Subnets: aws.StringSlice(subnetList),
+			}
+		}
+		runTaskInput = ecs.RunTaskInput{
+			Cluster:        aws.String(Cluster),
+			Count:          aws.Int64(1),
+			LaunchType:     aws.String(LaunchType),
+			TaskDefinition: aws.String(TaskDefinition),
+			NetworkConfiguration: &ecs.NetworkConfiguration{
+				AwsvpcConfiguration: &awsVpcConfiguration,
+			},
+		}
+	}
+	output, err := svc.RunTask(&runTaskInput)
 	if err != nil {
 		fmt.Println("Got error launching task:")
 		fmt.Println(err.Error())
 		os.Exit(1)
 	}
 
-	TaskArn := *output.Tasks[0].TaskArn
-	TaskArnSplit := strings.Split(TaskArn, "/")
-	TaskArnID := TaskArnSplit[len(TaskArnSplit)-1]
+	taskArn := *output.Tasks[0].TaskArn
+	taskArnSplit := strings.Split(taskArn, "/")
+	taskArnID := taskArnSplit[len(taskArnSplit)-1]
 
-	ContainerName := *output.Tasks[0].Containers[0].Name
+	containerName := *output.Tasks[0].Containers[0].Name
 
-	TaskDefinitionOutput, _ := svc.DescribeTaskDefinition(&ecs.DescribeTaskDefinitionInput{
+	taskDefinitionOutput, _ := svc.DescribeTaskDefinition(&ecs.DescribeTaskDefinitionInput{
 		TaskDefinition: aws.String(TaskDefinition),
 	})
-	logPrefix := *TaskDefinitionOutput.TaskDefinition.ContainerDefinitions[0].LogConfiguration.Options["awslogs-stream-prefix"]
-
+	logPrefix := *taskDefinitionOutput.TaskDefinition.ContainerDefinitions[0].LogConfiguration.Options["awslogs-stream-prefix"]
 	err = svc.WaitUntilTasksStopped(&ecs.DescribeTasksInput{
 		Cluster: aws.String(Cluster),
-		Tasks:   aws.StringSlice([]string{TaskArn}),
+		Tasks:   aws.StringSlice([]string{taskArn}),
 	})
 	if err != nil {
 		fmt.Println("Got error running the task:")
 		fmt.Println(err.Error())
 		os.Exit(1)
 	}
-	logGroupName := logPrefix + "/" + ContainerName + "/" + TaskArnID
-	return logGroupName, TaskArnID
+	logStreamName := logPrefix + "/" + containerName + "/" + taskArnID
+	logGroupName := *taskDefinitionOutput.TaskDefinition.ContainerDefinitions[0].LogConfiguration.Options["awslogs-group"]
+	return logGroupName, logStreamName, taskArnID
 }
 
 // GetLogs prints all the logs for specified LogStream sorted from earliest to latest.
