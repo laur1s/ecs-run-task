@@ -70,43 +70,25 @@ func init() {
 
 // RunTask runs task definition on specified ECS Cluster
 // It returns the LogStreamName
-func RunTask(sess *session.Session, Cluster string, LaunchType string, TaskDefinition string) (string, string, string) {
-	subnetList := strings.Split(subnets, ",")
+func RunTask(sess *session.Session, ecsCluster string, launchType string, taskDefinition string) (string, string, string) {
 	svc := ecs.New(sess)
-	fmt.Printf("Launching task %s in an ECS Cluster %s...", TaskDefinition, Cluster)
-	var runTaskInput ecs.RunTaskInput
-	if subnets == "" {
-		runTaskInput = ecs.RunTaskInput{
-			Cluster:        aws.String(Cluster),
-			Count:          aws.Int64(1),
-			LaunchType:     aws.String(LaunchType),
-			TaskDefinition: aws.String(TaskDefinition),
-		}
-	} else {
-		var awsVpcConfiguration ecs.AwsVpcConfiguration
-		if securityGroups != "" {
-			sgList := strings.Split(securityGroups, ",")
-
-			awsVpcConfiguration = ecs.AwsVpcConfiguration{
-				SecurityGroups: aws.StringSlice(sgList),
-				Subnets:        aws.StringSlice(subnetList),
-			}
-		} else {
-			awsVpcConfiguration = ecs.AwsVpcConfiguration{
-				Subnets: aws.StringSlice(subnetList),
-			}
-		}
-		runTaskInput = ecs.RunTaskInput{
-			Cluster:        aws.String(Cluster),
-			Count:          aws.Int64(1),
-			LaunchType:     aws.String(LaunchType),
-			TaskDefinition: aws.String(TaskDefinition),
-			NetworkConfiguration: &ecs.NetworkConfiguration{
-				AwsvpcConfiguration: &awsVpcConfiguration,
+	fmt.Printf("Launching task %s in an ECS Cluster %s...", taskDefinition, ecsCluster)
+	runTaskInput := &ecs.RunTaskInput{
+		Cluster:        aws.String(ecsCluster),
+		Count:          aws.Int64(1),
+		LaunchType:     aws.String(launchType),
+		TaskDefinition: aws.String(taskDefinition),
+	}
+	if subnets != "" || securityGroups != "" {
+		fmt.Println("test")
+		runTaskInput.NetworkConfiguration = &ecs.NetworkConfiguration{
+			AwsvpcConfiguration: &ecs.AwsVpcConfiguration{
+				Subnets:        aws.StringSlice(strings.Split(subnets, ",")),
+				SecurityGroups: aws.StringSlice(strings.Split(securityGroups, ",")),
 			},
 		}
 	}
-	output, err := svc.RunTask(&runTaskInput)
+	output, err := svc.RunTask(runTaskInput)
 	if err != nil {
 		fmt.Println("Got error launching task:")
 		fmt.Println(err.Error())
@@ -120,11 +102,11 @@ func RunTask(sess *session.Session, Cluster string, LaunchType string, TaskDefin
 	containerName := *output.Tasks[0].Containers[0].Name
 
 	taskDefinitionOutput, _ := svc.DescribeTaskDefinition(&ecs.DescribeTaskDefinitionInput{
-		TaskDefinition: aws.String(TaskDefinition),
+		TaskDefinition: aws.String(taskDefinition),
 	})
 	logPrefix := *taskDefinitionOutput.TaskDefinition.ContainerDefinitions[0].LogConfiguration.Options["awslogs-stream-prefix"]
 	err = svc.WaitUntilTasksStopped(&ecs.DescribeTasksInput{
-		Cluster: aws.String(Cluster),
+		Cluster: aws.String(ecsCluster),
 		Tasks:   aws.StringSlice([]string{taskArn}),
 	})
 	if err != nil {
@@ -138,13 +120,13 @@ func RunTask(sess *session.Session, Cluster string, LaunchType string, TaskDefin
 }
 
 // GetLogs prints all the logs for specified LogStream sorted from earliest to latest.
-func GetLogs(sess *session.Session, LogStreamName string, LogGroupName string) {
+func GetLogs(sess *session.Session, logStreamName string, logGroupName string) {
 	svc := cloudwatchlogs.New(sess)
 
 	resp, err := svc.GetLogEvents(&cloudwatchlogs.GetLogEventsInput{
 		Limit:         aws.Int64(100),
-		LogGroupName:  aws.String(LogGroupName),
-		LogStreamName: aws.String(LogStreamName),
+		LogGroupName:  aws.String(logGroupName),
+		LogStreamName: aws.String(logStreamName),
 		StartFromHead: aws.Bool(true),
 	})
 	if err != nil {
@@ -159,11 +141,11 @@ func GetLogs(sess *session.Session, LogStreamName string, LogGroupName string) {
 }
 
 // GetExit Returns the exit code of the function and stoppedReason
-func GetExit(sess *session.Session, ClusterName string, Task string) (int64, string) {
+func GetExit(sess *session.Session, ecsCluster string, task string) (int64, string) {
 	svc := ecs.New(sess)
 	output, err := svc.DescribeTasks(&ecs.DescribeTasksInput{
-		Cluster: aws.String(ClusterName),
-		Tasks:   aws.StringSlice([]string{Task}),
+		Cluster: aws.String(ecsCluster),
+		Tasks:   aws.StringSlice([]string{task}),
 	})
 	if err != nil {
 		fmt.Println("Got error describing task:")
