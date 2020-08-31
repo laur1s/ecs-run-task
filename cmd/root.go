@@ -6,6 +6,7 @@ import (
 	"io/ioutil"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -39,10 +40,10 @@ var rootCmd = &cobra.Command{
 			taskDefinition = ParseTaskDefinition(sess, taskDefinition)
 			fmt.Println("Succesfully uploaded: ", taskDefinition)
 		}
-
+		fmt.Printf("Launching task %s in an ECS Cluster %s...\n", taskDefinition, ecsCluster)
 		logGroupName, logStreamName, taskArnID := RunTask(sess, ecsCluster, launchType, taskDefinition)
-
-		GetLogs(sess, logStreamName, logGroupName)
+		fmt.Println("Logs:")
+		printEvents(GetLogs(sess, logStreamName, logGroupName))
 		exitCode, exitReason := GetExit(sess, ecsCluster, taskArnID)
 		fmt.Println("Exit reason:", exitReason)
 		os.Exit(int(exitCode))
@@ -72,7 +73,6 @@ func init() {
 // It returns the LogStreamName
 func RunTask(sess *session.Session, ecsCluster string, launchType string, taskDefinition string) (string, string, string) {
 	svc := ecs.New(sess)
-	fmt.Printf("Launching task %s in an ECS Cluster %s...", taskDefinition, ecsCluster)
 	runTaskInput := &ecs.RunTaskInput{
 		Cluster:        aws.String(ecsCluster),
 		Count:          aws.Int64(1),
@@ -120,7 +120,7 @@ func RunTask(sess *session.Session, ecsCluster string, launchType string, taskDe
 }
 
 // GetLogs prints all the logs for specified LogStream sorted from earliest to latest.
-func GetLogs(sess *session.Session, logStreamName string, logGroupName string) {
+func GetLogs(sess *session.Session, logStreamName string, logGroupName string) []*cloudwatchlogs.OutputLogEvent {
 	svc := cloudwatchlogs.New(sess)
 
 	resp, err := svc.GetLogEvents(&cloudwatchlogs.GetLogEventsInput{
@@ -134,10 +134,7 @@ func GetLogs(sess *session.Session, logStreamName string, logGroupName string) {
 		fmt.Println(err.Error())
 		os.Exit(1)
 	}
-	fmt.Println("Logs:")
-	for _, event := range resp.Events {
-		fmt.Println("  ", *event.Message)
-	}
+	return resp.Events
 }
 
 // GetExit Returns the exit code of the function and stoppedReason
@@ -177,4 +174,14 @@ func ParseTaskDefinition(sess *session.Session, fileName string) string {
 	}
 	return *output.TaskDefinition.TaskDefinitionArn
 
+}
+
+func printEvents(events []*cloudwatchlogs.OutputLogEvent) {
+	for _, event := range events {
+		// AWS returns milliseconds of unix time.
+		// So we have to transfer to second.
+		timestamp := time.Unix((*event.Timestamp / 1000), 0)
+		message := *event.Message
+		fmt.Printf("[%s] %s\n", timestamp, message)
+	}
 }
